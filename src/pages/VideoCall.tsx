@@ -85,98 +85,110 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userId }) => {
     };
   }, [roomId, userId]);
 
-  // Create new peer connection
-  const createPeerConnection = (
-    otherUserId: string,
-    stream: MediaStream,
-    initiator: boolean
-  ) => {
-    const peer = new RTCPeerConnection({
-      iceServers: [
-        { urls: "stun:stun.l.google.com:19302" } // Free Google STUN server
-      ]
+// Create Peer Connection
+const createPeerConnection = (
+  otherUserId: string,
+  stream: MediaStream,
+  initiator: boolean
+) => {
+  const peer = new RTCPeerConnection({
+    iceServers: [
+      { urls: "stun:stun.l.google.com:19302" }
+    ]
+  });
+
+  // Add local tracks
+  stream.getTracks().forEach((track) => peer.addTrack(track, stream));
+
+  // Remote stream
+  peer.ontrack = (event) => {
+    setRemoteStreams((prev) => {
+      if (!prev.find((s) => s.id === event.streams[0].id)) {
+        return [...prev, event.streams[0]];
+      }
+      return prev;
     });
+  };
+
+  // ICE candidates
+  peer.onicecandidate = (event) => {
+    if (event.candidate) {
+      socket.emit("candidate", {
+        roomId,
+        userId,
+        candidate: event.candidate,
+        to: otherUserId, // <--- specify target
+      });
+    }
+  };
+
+  peersRef.current[otherUserId] = peer;
+
+  // If initiator, create offer
+  if (initiator) {
+    peer.createOffer().then((offer) => {
+      peer.setLocalDescription(offer);
+      socket.emit("signal", {
+        roomId,
+        userId,
+        signal: { sdp: offer },
+        to: otherUserId, // <--- specify target
+      });
+    });
+  }
+};
 
 
-    // Add local tracks
+  // Handle incoming signal
+const handleSignal = async (data: SignalData, stream: MediaStream) => {
+  const { userId: fromUser, signal } = data;
+
+  let peer = peersRef.current[fromUser];
+  if (!peer) {
+    peer = new RTCPeerConnection({
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+    });
+    peersRef.current[fromUser] = peer;
+
+    // Add local stream
     stream.getTracks().forEach((track) => peer.addTrack(track, stream));
 
-    // Handle remote stream
+    // Handle remote
     peer.ontrack = (event) => {
-      const remoteStream = event.streams[0];
-      setRemoteStreams((prev) => {
-        if (prev.find((s) => s.id === remoteStream.id)) return prev; // avoid duplicates
-        return [...prev, remoteStream];
-      });
+      setRemoteStreams((prev) => [...prev, event.streams[0]]);
     };
 
-    // ICE candidates
+    // ICE
     peer.onicecandidate = (event) => {
       if (event.candidate) {
         socket.emit("candidate", {
-          candidate: event.candidate,
           roomId,
-          from: userId,
-          to: otherUserId,
+          userId,
+          candidate: event.candidate,
+          to: fromUser,
         });
       }
     };
+  }
 
-    peersRef.current[otherUserId] = peer;
-
-    if (initiator) {
-      peer.createOffer().then((offer) => {
-        peer.setLocalDescription(offer);
-        socket.emit("signal", { roomId, userId, signal: { sdp: offer } });
+  // Handle SDP
+  if (signal.sdp) {
+    await peer.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+    if (signal.sdp.type === "offer") {
+      const answer = await peer.createAnswer();
+      await peer.setLocalDescription(answer);
+      socket.emit("signal", {
+        roomId,
+        userId,
+        signal: { sdp: answer },
+        to: fromUser,
       });
     }
-  };
+  } else if (signal.candidate) {
+    await peer.addIceCandidate(new RTCIceCandidate(signal.candidate));
+  }
+};
 
-  // Handle incoming signal
-  const handleSignal = async (data: SignalData, stream: MediaStream) => {
-    const { userId: fromUser, signal } = data;
-
-    let peer = peersRef.current[fromUser];
-    if (!peer) {
-      peer = new RTCPeerConnection();
-      peersRef.current[fromUser] = peer;
-
-      stream.getTracks().forEach((track) => peer.addTrack(track, stream));
-
-      peer.ontrack = (event) => {
-        const remoteStream = event.streams[0];
-        setRemoteStreams((prev) => {
-          if (prev.find((s) => s.id === remoteStream.id)) return prev;
-          return [...prev, remoteStream];
-        });
-      };
-
-      peer.onicecandidate = (event) => {
-        if (event.candidate) {
-          socket.emit("signal", {
-            roomId,
-            userId,
-            signal: { candidate: event.candidate },
-          });
-        }
-      };
-    }
-
-    if (signal.sdp) {
-      await peer.setRemoteDescription(new RTCSessionDescription(signal.sdp));
-      if (signal.sdp.type === "offer") {
-        const answer = await peer.createAnswer();
-        await peer.setLocalDescription(answer);
-        socket.emit("signal", { roomId, userId, signal: { sdp: answer } });
-      }
-    } else if (signal.candidate) {
-      try {
-        await peer.addIceCandidate(new RTCIceCandidate(signal.candidate));
-      } catch (err) {
-        console.error("Error adding ICE candidate", err);
-      }
-    }
-  };
 
   // ✅ End Call
   const endCall = () => {
