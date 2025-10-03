@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
 
-const socket: Socket = io("https://your-backend-url-here"); // change to your deployed backend
+const socket: Socket = io("https://your-backend-url-here"); // change to your backend
 
 const VideoCall: React.FC<{ roomId: string; userId: string }> = ({ roomId, userId }) => {
   const localVideoRef = useRef<HTMLVideoElement>(null);
@@ -10,22 +10,21 @@ const VideoCall: React.FC<{ roomId: string; userId: string }> = ({ roomId, userI
   const localStreamRef = useRef<MediaStream | null>(null);
 
   const [connected, setConnected] = useState(false);
+  const [ended, setEnded] = useState(false);
 
   useEffect(() => {
     const start = async () => {
-      // get camera + mic
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = stream;
       }
       localStreamRef.current = stream;
 
-      // create peer connection with STUN + TURN
       const pc = new RTCPeerConnection({
         iceServers: [
-          { urls: "stun:stun.l.google.com:19302" }, // STUN
+          { urls: "stun:stun.l.google.com:19302" },
           {
-            urls: "turn:openrelay.metered.ca:80", // TURN (free dev)
+            urls: "turn:openrelay.metered.ca:80",
             username: "openrelayproject",
             credential: "openrelayproject",
           },
@@ -43,38 +42,31 @@ const VideoCall: React.FC<{ roomId: string; userId: string }> = ({ roomId, userI
       });
       pcRef.current = pc;
 
-      // add local tracks
       stream.getTracks().forEach(track => {
         pc.addTrack(track, stream);
       });
 
-      // when remote stream arrives
       pc.ontrack = event => {
         if (remoteVideoRef.current) {
           remoteVideoRef.current.srcObject = event.streams[0];
         }
       };
 
-      // send ICE candidates to backend
       pc.onicecandidate = event => {
         if (event.candidate) {
           socket.emit("candidate", { candidate: event.candidate, roomId, from: userId });
         }
       };
 
-      // listen for user joining
       socket.emit("join-room", { roomId, userId });
 
       socket.on("user-joined", async (otherUserId: string) => {
-        console.log("User joined:", otherUserId);
-
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
 
         socket.emit("signal", { roomId, from: userId, to: otherUserId, signal: offer });
       });
 
-      // listen for signals
       socket.on("signal", async (data: any) => {
         if (!pc) return;
 
@@ -82,14 +74,12 @@ const VideoCall: React.FC<{ roomId: string; userId: string }> = ({ roomId, userI
           await pc.setRemoteDescription(new RTCSessionDescription(data.signal));
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
-
           socket.emit("signal", { roomId, from: userId, to: data.from, signal: answer });
         } else if (data.signal.type === "answer") {
           await pc.setRemoteDescription(new RTCSessionDescription(data.signal));
         }
       });
 
-      // listen for ICE candidates
       socket.on("candidate", async (data: any) => {
         try {
           await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
@@ -104,12 +94,18 @@ const VideoCall: React.FC<{ roomId: string; userId: string }> = ({ roomId, userI
     start();
 
     return () => {
-      // cleanup
-      socket.disconnect();
-      pcRef.current?.close();
-      localStreamRef.current?.getTracks().forEach(track => track.stop());
+      cleanup();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomId, userId]);
+
+  const cleanup = () => {
+    socket.disconnect();
+    pcRef.current?.close();
+    localStreamRef.current?.getTracks().forEach(track => track.stop());
+    setConnected(false);
+    setEnded(true);
+  };
 
   return (
     <div className="flex flex-col items-center">
@@ -118,11 +114,17 @@ const VideoCall: React.FC<{ roomId: string; userId: string }> = ({ roomId, userI
         <video ref={localVideoRef} autoPlay playsInline muted className="w-64 h-48 bg-black rounded" />
         <video ref={remoteVideoRef} autoPlay playsInline className="w-64 h-48 bg-black rounded" />
       </div>
-      {connected ? (
-        <p className="mt-2 text-green-600">Connected ✅</p>
-      ) : (
-        <p className="mt-2 text-red-600">Connecting...</p>
+
+      {connected && !ended && (
+        <button
+          onClick={cleanup}
+          className="mt-4 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
+        >
+          End Call
+        </button>
       )}
+
+      {ended && <p className="mt-4 text-red-500">Call Ended ❌</p>}
     </div>
   );
 };
