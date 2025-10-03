@@ -94,7 +94,14 @@ const VideoCall: React.FC<VideoCallProps> = ({ roomId, userId }) => {
     initiator: boolean
   ) => {
     const peer = new RTCPeerConnection({
-      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" }, // STUN
+        {
+          urls: "turn:openrelay.metered.ca:80",   // TURN (free public service)
+          username: "openrelayproject",
+          credential: "openrelayproject",
+        },
+      ],
     });
 
     // Add local tracks
