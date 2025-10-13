@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
 
-const socket: Socket = io("https://your-backend-url-here"); // change to your backend
+const socket: Socket = io("https://nest-webrtc-signaling-server.onrender.com"); // change to your backend
 
 const VideoCall: React.FC<{ roomId: string; userId: string }> = ({ roomId, userId }) => {
   const localVideoRef = useRef<HTMLVideoElement>(null);
